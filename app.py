@@ -17,20 +17,18 @@ PROJECT_ID = os.environ["PROJECT_ID"]
 TASKS_REGION = os.environ.get("TASKS_REGION", "us-central1")
 CALLER_SA = os.environ["CALLER_SA"]
 
-# Nombre del bucket y archivo (Defínelos en tus variables de entorno)
 CONFIG_BUCKET_NAME = os.environ.get("CONFIG_BUCKET_NAME", "mi-bucket-de-configs-enqueuer")
 CONFIG_FILE_NAME = os.environ.get("CONFIG_FILE_NAME", "services.json")
 
-# --- GESTOR DE CONFIGURACIÓN (CON CACHÉ) ---
+# --- GESTOR DE CONFIGURACIÓN ---
 class ConfigManager:
     def __init__(self):
         self._config = {}
         self._last_loaded = datetime.min
-        self._cache_ttl = timedelta(minutes=5) # Recargar cada 5 minutos
+        self._cache_ttl = timedelta(minutes=5)
         self._storage_client = storage.Client()
 
     def get_services(self) -> Dict[str, Any]:
-        """Devuelve la configuración, recargándola si ha expirado."""
         now = datetime.utcnow()
         if now - self._last_loaded > self._cache_ttl:
             print("🔄 Recargando configuración desde GCS...")
@@ -41,17 +39,12 @@ class ConfigManager:
         try:
             bucket = self._storage_client.bucket(CONFIG_BUCKET_NAME)
             blob = bucket.blob(CONFIG_FILE_NAME)
-            
-            # Descargamos el contenido como texto
             json_content = blob.download_as_text()
             self._config = json.loads(json_content)
-            
             self._last_loaded = datetime.utcnow()
             print(f"✅ Configuración actualizada. Servicios: {list(self._config.keys())}")
         except Exception as e:
             print(f"⚠️ Error leyendo bucket: {e}")
-            # Estrategia de fallo: Si ya tenemos config, la mantenemos. 
-            # Si está vacía, intentamos leer local como fallback.
             if not self._config:
                 self._load_local_fallback()
 
@@ -64,22 +57,24 @@ class ConfigManager:
         except Exception as e:
             print(f"❌ Fallo total de configuración: {e}")
 
-# Instancia global
 config_manager = ConfigManager()
 
-app = FastAPI(title="Ortega Enqueuer API (GCS Powered)")
+app = FastAPI(title="Ortega Enqueuer API (With Auth Forwarding)")
 
 # --- MODELOS ---
 class EnqueueRequest(BaseModel):
     service: str
     payload: Dict[str, Any] = Field(default_factory=dict)
+    
+    # NUEVO CAMPO: Aquí recibirás la API Key que el worker necesita
+    worker_api_key: Optional[str] = Field(None, description="API Key to forward in X-API-Key header")
+    
     idempotency_key: Optional[str] = None
     delay_s: Optional[int] = Field(default=None, ge=0)
     deadline_s: Optional[int] = Field(default=None, ge=1, le=3600)
 
     @field_validator('service')
     def service_must_exist(cls, v):
-        # Obtenemos la config actual para validar
         current_services = config_manager.get_services()
         if v not in current_services:
             raise ValueError(f"Servicio '{v}' no encontrado. Disponibles: {list(current_services.keys())}")
@@ -97,13 +92,20 @@ def enqueue(req: EnqueueRequest):
     idem = req.idempotency_key or str(uuid.uuid4())
     body_json = json.dumps(req.payload, ensure_ascii=False)
 
+    # 1. Construimos los headers base
+    headers = {
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": idem
+    }
+
+    # 2. Si nos mandaron una API Key para el worker, la agregamos al header
+    if req.worker_api_key:
+        headers["X-API-Key"] = req.worker_api_key
+
     http_request = {
         "http_method": tasks_v2.HttpMethod.POST,
         "url": cfg["url"],
-        "headers": {
-            "Content-Type": "application/json",
-            "X-Idempotency-Key": idem
-        },
+        "headers": headers, # Usamos el diccionario de headers dinámico
         "body": body_json.encode("utf-8"),
         "oidc_token": {
             "service_account_email": CALLER_SA,
@@ -125,13 +127,12 @@ def enqueue(req: EnqueueRequest):
             "ok": True,
             "task": resp.name,
             "service": req.service,
-            "from_config_ver": str(config_manager._last_loaded) # Debug info
+            "forwarded_api_key": bool(req.worker_api_key) # Confirmación visual de que se envió
         }
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail="Error en Cloud Tasks")
 
-# Endpoint útil para forzar recarga manual sin esperar el TTL
 @app.post("/config/refresh")
 def refresh_config():
     config_manager._load_from_gcs()

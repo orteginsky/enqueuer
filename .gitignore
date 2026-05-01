@@ -16,3 +16,5 @@ sa_key.json
 woven_project
 cloudconfig.yaml
 create_sa_gcp.txt
+deploy_universal.sh
+services.json

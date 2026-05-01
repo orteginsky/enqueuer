@@ -1,0 +1,41 @@
+# --- Control de Versiones e IDEs ---
+.git
+.gitignore
+.idea
+.vscode
+.dockerignore
+
+# --- Python y Entornos Virtuales ---
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+env
+
+# --- SECRETOS (¡CRÍTICO!) ---
+.env
+.env.*
+*.env
+sa_key.json
+enqueuer-api.json
+enqueuer-key.json
+credentials/
+# Bloqueamos cualquier JSON de cuenta de servicio por si acaso
+*-sa.json
+*-key.json
+
+# --- Configuración y Scripts de Despliegue ---
+# No queremos esto dentro del contenedor, ya que el contenedor debe ser "universal"
+# y leer la configuración desde el Bucket, no desde un archivo local congelado.
+services.json
+cloudconfig.yaml
+create_sa_gcp.txt
+deploy_universal.sh
+logs.txt
+
+# --- Documentación y Proyectos Ajenos ---
+README.md
+woven_project/
+Dockerfile

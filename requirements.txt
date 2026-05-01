@@ -3,3 +3,5 @@ uvicorn[standard]==0.32.0
 google-cloud-tasks==2.16.5
 google-cloud-storage
 pydantic==2.9.2
+python-dotenv
+gunicorn
